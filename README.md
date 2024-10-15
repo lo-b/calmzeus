@@ -8,7 +8,7 @@ Exploration for project [peacefulares](https://github.com/lo-b/peacefulares).
 
 > _"Jupyter Ascending lets you edit Jupyter notebooks from your favorite editor,
 > then instantly sync and execute that code in the Jupyter notebook running in
-> your browser."_ -- [source]()
+> your browser."_ -- [source](https://github.com/imbue-ai/jupyter_ascending)
 
 #### Setup:
 
