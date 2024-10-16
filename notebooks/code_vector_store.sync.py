@@ -201,3 +201,5 @@ for res, score in results:
 # token, tree or graph-based.
 # - use 'better' code embedding model
 # - prompt engineering for store retrieval
+# - reranking
+# - add grader (see LangChain's *corrective* RAG example)
