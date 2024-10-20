@@ -21,6 +21,7 @@ langgraph = "^0.2.35"
 langsmith = "^0.1.133"
 langchain-ollama = "^0.2.0"
 langchain-qdrant = "^0.1.4"
+langchain-mistralai = "^0.2.0"
 
 
 [tool.poetry.group.dev.dependencies]

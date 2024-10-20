@@ -46,6 +46,7 @@
 # - `LANGCHAIN_PROJECT`
 # - `QDRANT_API_KEY`
 # - `QDRANT_CLUSTER_ENDPOINT`
+# - `MISTRAL_API_KEY`
 
 # Grab a copy of the Java source code, available
 # [here](https://github.com/lo-b/heavenlyhades/tree/main/java/simple-api).
@@ -66,7 +67,7 @@ from langchain_community.document_loaders.parsers.language.language_parser impor
 )
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
-from langchain_ollama import ChatOllama
+from langchain_mistralai.chat_models import ChatMistralAI
 from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import Language
 from langchain_voyageai import VoyageAIEmbeddings
@@ -78,11 +79,20 @@ from rich import print as rprint
 assert load_dotenv(), ".env file should be defined"
 
 # %% [markdown]
-### Load source code in as documents
+### Define some consts
+
 # %%
-src_code_dir = "/home/bram/projects/heavenlyhades/java/simple-api/"
+QDRANT_COLLECTION_NAME = "simple-java-api"
+VOYAGE_MODEL_NAME = "voyage-code-2"
+SRC_CODE_PATH = "/home/bram/projects/heavenlyhades/java/simple-api/"
+MISTRAL_MODEL_NAME = "open-codestral-mamba"
+
+# %% [markdown]
+### Load source code in as documents
+
+# %%
 loader = GenericLoader.from_filesystem(
-    src_code_dir,
+    SRC_CODE_PATH,
     glob="**/src/main/**/[!.]*",
     suffixes=[".java", ".properties"],
     parser=LanguageParser(Language.JAVA),
@@ -90,7 +100,7 @@ loader = GenericLoader.from_filesystem(
 documents = loader.load()
 
 # %%
-print("loaded ", len(documents), " from disk")
+print("loaded", len(documents), "files from disk")
 
 # %% [markdown]
 #### Sample document
@@ -100,7 +110,7 @@ rprint(documents[0])
 # %% [markdown]
 ### Embed documents using Voyage.ai & store in vector DB
 # %%
-embeddings = VoyageAIEmbeddings(model="voyage-code-2", batch_size=1)
+embeddings = VoyageAIEmbeddings(model=VOYAGE_MODEL_NAME, batch_size=1)
 
 # %%
 sample_text = "69-420"  # example text to determine embedding size
@@ -115,18 +125,17 @@ client = QdrantClient(
 )
 
 _ = client.create_collection(
-    collection_name="simple-java-api",
+    collection_name=QDRANT_COLLECTION_NAME,
     vectors_config=VectorParams(size=embedding_size, distance=Distance.COSINE),
 )
 
 # %%
 vector_store = QdrantVectorStore(
     client=client,
-    collection_name="simple-java-api",
+    collection_name=QDRANT_COLLECTION_NAME,
     embedding=embeddings,
 )
 
-# %%
 v_uuids = vector_store.add_documents(documents=documents, ids=uuids)
 
 # %% [markdown]
@@ -138,17 +147,11 @@ retriever = vector_store.as_retriever(
 )
 
 # %%
-# TODO: Ollama setup
-llm = ChatOllama(
-    model="llama3.2:1b",
-    temperature=0,
-    num_gpu=1,
-)
+llm = ChatMistralAI(model_name=MISTRAL_MODEL_NAME)
 
 # %%
 retriever = vector_store.as_retriever()
-# TODO: make prompt public or refactor
-prompt = hub.pull("simplig-crag-config-prompt")
+prompt = hub.pull("lo-b/rag-config-assist-prompt")
 
 # %% [markdown]
 # # Building the actual chain + tracing
@@ -162,3 +165,17 @@ rag_chain = (
 )
 
 rag_chain.invoke("Show me how to make my app run on port 7777")
+
+# %% [markdown]
+# ### LangSmith trace output
+# Below, a print screen of the rag chain's execution trace where (rendered)
+# input/output can be seen.
+#
+# The model gives the correct output (green) but also gives additional
+# incorrect information (red). It is *not necessary* to 'change' the main
+# class. The change is even -- I think -- what's already in the class too...
+# ![Voyage-Mistral-Rag](../assets/langsmith-trace-simple-java-api-voyage-mistral.png)
+
+# NOTE: In previous runs model output contained additional, correct, info --
+# something like: "this is how to run your app". Additional information could
+# be useful but can also pollute output/complicates PR creation.
