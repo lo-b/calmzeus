@@ -30,3 +30,72 @@
 ### Goal
 # Create an agent/chain to extract relevant code/text from LLM answer and
 # create a commit.
+
+## Exploration
+
+# %% [markdown]
+### Imports
+# %%
+import os
+
+from dotenv import load_dotenv
+from langchain import hub
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import (
+    RunnablePassthrough,
+    RunnableSerializable,
+)
+from langchain_mistralai.chat_models import ChatMistralAI
+from langchain_qdrant import QdrantVectorStore
+from langchain_voyageai import VoyageAIEmbeddings
+from qdrant_client import QdrantClient
+from typing_extensions import Never
+
+# %% [markdown]
+### Define constants
+# %%
+QDRANT_COLLECTION_NAME = "simple-java-api"
+VOYAGE_MODEL_NAME = "voyage-code-2"
+MISTRAL_MODEL_NAME = "open-codestral-mamba"
+
+# %%
+assert load_dotenv(), ".env files exists and contains at least one variable"
+
+# %% [markdown]
+### Recreate simple RAG chain
+# %%
+embeddings = VoyageAIEmbeddings(model=VOYAGE_MODEL_NAME, batch_size=1)
+
+client = QdrantClient(
+    url=f"https://{os.environ['QDRANT_CLUSTER_ENDPOINT']}:6333",
+    api_key=os.environ["QDRANT_API_KEY"],
+)
+
+vector_store = QdrantVectorStore(
+    client=client,
+    collection_name=QDRANT_COLLECTION_NAME,
+    embedding=embeddings,
+)
+
+retriever = vector_store.as_retriever(
+    search_type="mmr",
+    search_kwargs={"k": 4, "fetch_k": 5, "lambda_mult": 0.25},
+)
+
+prompt: PromptTemplate = hub.pull("lo-b/rag-config-assist-prompt")
+
+llm = ChatMistralAI(model_name=MISTRAL_MODEL_NAME)
+
+rag_chain: RunnableSerializable[Never, str] = (
+    {"context": retriever, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+# %%
+rag_config_answer: str = rag_chain.invoke("Show me how to make my app run on port 7777")
+
+# %%
+rag_config_answer
