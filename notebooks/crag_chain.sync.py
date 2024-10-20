@@ -31,8 +31,9 @@
 # \<link>
 
 # ## Goal
-# Build a chain with tracing to see how a rudimentary vector store and local
-# llama model perform for a simple configuration task.
+# Build a simple RAG chain to perform a config task on a simple Java
+# application and evaluate its performance. Add tracing for rudimentary
+# evaluation of the proposed change.
 
 ## Before you start
 # [voyage-code-2](https://blog.voyageai.com/2024/01/23/voyage-code-2-elevate-your-code-retrieval/)
@@ -154,7 +155,7 @@ retriever = vector_store.as_retriever()
 prompt = hub.pull("lo-b/rag-config-assist-prompt")
 
 # %% [markdown]
-# # Building the actual chain + tracing
+## Building the actual chain + tracing
 
 # %%
 rag_chain = (
@@ -174,8 +175,29 @@ rag_chain.invoke("Show me how to make my app run on port 7777")
 # The model gives the correct output (green) but also gives additional
 # incorrect information (red). It is *not necessary* to 'change' the main
 # class. The change is even -- I think -- what's already in the class too...
-# ![Voyage-Mistral-Rag](../assets/langsmith-trace-simple-java-api-voyage-mistral.png)
+# ![Voyage-Mistral-RAG](../assets/langsmith-trace-simple-java-api-voyage-mistral.png)
 
 # NOTE: In previous runs model output contained additional, correct, info --
 # something like: "this is how to run your app". Additional information could
-# be useful but can also pollute output/complicates PR creation.
+# be useful but can also pollute output/complicate PR creation.
+
+## Conclusion
+# Using a simple prompt
+# (see 👉 [here](https://smith.langchain.com/hub/lo-b/rag-config-assist-prompt))
+# to guide the generation model worked pretty decent.
+
+# Initially, a local llama model was used which contained the correct answer,
+# but it contained some quirks, highlighted in red:
+# ![Voyage-Llama-RAG](../assets/langsmith-trace-simple-java-api-voyage-local-llama.png)
+
+# Swapping the local Llama model with Codestral showed better results. A
+# downside is that it can't easily be hosted locally. I need a *whole stick* of
+# 16GB extra RAM to run it on my PC... After which, it most definitely won't
+# fit into GPU memory, so I do not know what the latency will be.
+
+## Improvements
+# - Prompt engineering: ensure model only outputs desired *commitable* change
+# -- as of now, parsing output can be done but isn't ideal.
+# - Track code structure: keep track which lines of a file are fed to the model
+# as docs. Together with better prompt engineering above, model might be nudged
+# into the direction of generating a '*pure*' PR change.
