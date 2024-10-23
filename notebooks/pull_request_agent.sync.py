@@ -26,14 +26,16 @@
 # Ensures we keep track of the actual lines in source file of a snippet. Feed
 # al this context forward into the LLM. Maybe it can use the additional (e.g.
 # line number) context to be more precise in it's output.
+#
+# In this notebook, CST enrichment (for details see
+# [here](./cst_indexing.sync.ipynb)) + prompt engineering is used.
 
 ### Goal
 # Create an agent/chain to extract relevant code/text from LLM answer and
 # create a commit.
 
-## Exploration
-
 # %% [markdown]
+## Exploration
 ### Imports
 # %%
 import os
