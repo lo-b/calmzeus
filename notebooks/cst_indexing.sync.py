@@ -13,7 +13,7 @@
 # ---
 
 # %% [markdown]
-## Explore AST-based indexing
+## Explore CST-based indexing
 ### Intro
 # It's not trivial to *post process* LLM output and then manually piece
 # together *what exact* `sed` (or similar tool to edit text) command to run.
