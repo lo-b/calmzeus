@@ -50,6 +50,14 @@ import json
 from typing import Any, TypedDict
 
 from dotenv import load_dotenv
+from langchain_community.document_loaders.generic import GenericLoader
+from langchain_community.document_loaders.parsers.language.language_parser import (
+    LanguageParser,
+)
+from langchain_core.documents import Document
+from langchain_text_splitters import (
+    Language as SplitterLanguage,
+)
 from rich import print as rprint
 from tree_sitter import Language, Node, Parser, Tree
 
@@ -99,7 +107,7 @@ print(tree.root_node.descendant_count)
 
 
 # %% [markdown]
-### JSON representation (metadata of doc)
+### Convert tree to dictionary
 # Create *pre-order traversal* (first process a node itself, then its children)
 # algorithm to convert CST to JSON.
 
@@ -132,3 +140,50 @@ def node_to_dict(node: Node) -> NodeDict:
 ### pretty print JSON of parsed CST
 # %%
 rprint(json.dumps(node_to_dict(tree.root_node), indent=2))
+
+# %% [markdown]
+### Add CST to document metadata
+# Add *context syntax tree* (CST) dictionary to `.properties` files because
+# only this parser (language) is set up.
+#### Load docs
+
+# %%
+java_code_dir = "/home/bram/projects/heavenlyhades/java/simple-api/"
+loader = GenericLoader.from_filesystem(
+    java_code_dir,
+    glob="**/src/main/**/[!.]*",
+    suffixes=[".java", ".properties"],
+    parser=LanguageParser(SplitterLanguage.JAVA),
+)
+documents = loader.load()
+print("loaded", len(documents), "docs")
+
+
+# %% [markdown]
+#### Enrich metadata with CST
+# %%
+def construct_cst(doc: Document):
+    cst = parser.parse(str.encode(doc.page_content))
+    return node_to_dict(cst.root_node)
+
+
+for doc in documents:
+    if ".properties" in doc.metadata["source"]:
+        doc.metadata["cst"] = construct_cst(doc)
+
+enriched_prop_doc = [
+    doc for doc in documents if ".properties" in doc.metadata["source"]
+][0]
+
+rprint(enriched_prop_doc)
+
+# %% [markdown]
+## Conclusion
+# Using treesitter to parse Java `.properties` files to get a context tree,
+# proved pretty straight forward. Note, that for a file *containing a single property*
+# the CST is already pretty big.
+
+### Improvements
+# Prevent duplication of file content ('debug=false'); currently duplicated
+# in file, property and key + value texts. Maybe it's enough to only keep key
+# and values?
