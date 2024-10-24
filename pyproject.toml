@@ -23,6 +23,7 @@ langchain-ollama = "^0.2.0"
 langchain-qdrant = "^0.1.4"
 langchain-mistralai = "^0.2.0"
 tree-sitter-python = "^0.23.2"
+langchain-openai = "^0.2.3"
 
 
 [tool.poetry.group.dev.dependencies]

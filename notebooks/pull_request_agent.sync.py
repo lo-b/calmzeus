@@ -14,7 +14,7 @@
 
 # %% [markdown]
 ## Exploration of simple pull request (PR) agent
-
+#
 ### Intro
 # How to go from LLM response/answer to a commit (and PR)?
 #
@@ -29,7 +29,7 @@
 #
 # In this notebook, CST enrichment (for details see
 # [here](./cst_indexing.sync.ipynb)) + prompt engineering is used.
-
+#
 ### Goal
 # Create an agent/chain to extract relevant code/text from LLM answer and
 # create a commit.
@@ -48,7 +48,7 @@ from langchain_core.runnables import (
     RunnablePassthrough,
     RunnableSerializable,
 )
-from langchain_mistralai.chat_models import ChatMistralAI
+from langchain_openai import ChatOpenAI
 from langchain_qdrant import QdrantVectorStore
 from langchain_voyageai import VoyageAIEmbeddings
 from qdrant_client import QdrantClient
@@ -65,7 +65,16 @@ MISTRAL_MODEL_NAME = "open-codestral-mamba"
 assert load_dotenv(), ".env files exists and contains at least one variable"
 
 # %% [markdown]
-### Recreate simple RAG chain
+### Create (core) RAG flow
+# Consists of:
+# - indexing
+# - retrieval
+# - generation
+
+# %% [markdown]
+#### Indexing & retrieval
+# Load documents and enrich their metadata with *context syntax trees* (CSTs).
+# Add docs to vector store and create a retriever for the store.
 # %%
 embeddings = VoyageAIEmbeddings(model=VOYAGE_MODEL_NAME, batch_size=1)
 
@@ -85,19 +94,24 @@ retriever = vector_store.as_retriever(
     search_kwargs={"k": 4, "fetch_k": 5, "lambda_mult": 0.25},
 )
 
-prompt: PromptTemplate = hub.pull("lo-b/rag-config-assist-prompt")
+# %% [markdown]
+#### Rephrase question
+# Implement small chain to rephrase a user's question -- ideally to find a
+# more similar document. Using [GPT-4o mini](
+# https://openai.com/index/gpt-4o-mini-advancing-cost-efficient-intelligence/
+# ) to rephrase question. As of writing, costs are as following:
+# |in- or output|cost per million (1M) tokens|
+# |---|---|
+# |input|\$0.150|
+# |output|\$0.600|
 
-llm = ChatMistralAI(model_name=MISTRAL_MODEL_NAME)
+# %%
+prompt: PromptTemplate = hub.pull("lo-b/rag-rephrase-assist-prompt")
+llm = ChatOpenAI(model="gpt-4o-mini")
 
-rag_chain: RunnableSerializable[Never, str] = (
-    {"context": retriever, "question": RunnablePassthrough()}
-    | prompt
-    | llm
-    | StrOutputParser()
+rephraser: RunnableSerializable[Never, str] = (
+    {"question": RunnablePassthrough()} | prompt | llm | StrOutputParser()
 )
 
 # %%
-rag_config_answer: str = rag_chain.invoke("Show me how to make my app run on port 7777")
-
-# %%
-rag_config_answer
+rephraser.invoke("Change app dev port to 7777")
