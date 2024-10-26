@@ -357,7 +357,7 @@ checkpointer = MemorySaver()
 app = workflow.compile(checkpointer=checkpointer)
 
 # %% [markdown]
-# ### Visualize graph
+# #### Visualize graph
 # %%
 display(Image(app.get_graph(xray=True).draw_mermaid_png()))
 
@@ -370,7 +370,7 @@ echo "serendipity" > test_file.txt
 
 
 # %% [markdown]
-# #### Ask agent to change manipulate text
+# #### Ask agent to manipulate text
 # %%
 config = {"configurable": {"thread_id": "1"}}
 file_location = "/home/bram/projects/calmzeus/notebooks/test_file.txt"
@@ -391,3 +391,216 @@ with open(file_location, "r") as s:
 # %%
 %%bash
 rm /home/bram/projects/calmzeus/notebooks/test_file.txt
+
+# %% [markdown]
+# ### Manual agent call flow
+# Manually call agents and their tools to change, commit and create a PR.
+
+# #### list current git changes
+# %%
+%%bash
+git -C /home/bram/projects/git_test_repo status
+
+# %% [markdown]
+# #### use sed to create change
+# %%
+file_to_manipulate = "/home/bram/projects/git_test_repo/some_file.txt"
+manipulate_prompt = (
+    "Add a line saying 'added line' "
+    f"to the file located at `{file_to_manipulate}`"
+)
+events = app.stream({"messages": [("user", manipulate_prompt)]}, config, stream_mode="values")
+for event in events:
+    event["messages"][-1].pretty_print()
+
+
+# %% [markdown]
+# #### show diff after agent tool call
+# %%
+%%bash
+git -C /home/bram/projects/git_test_repo diff
+
+# %% [markdown]
+# #### define git commit tool and add it to the tools
+# %%
+@tool
+def git_tool(sub_cmd: str, cmd_args: list[str]):
+    """
+    Use git sub command (sub_cmd) to create a commit (commit) or stage changes.
+    """
+    # WARNING: potential security & system risk if allowed to call ANY task;
+    cmd = ["git", sub_cmd] + cmd_args
+
+    try:
+        print("DEBUG:", "try running following command:\n", f"==> {cmd} <==")
+        result = subprocess.run(
+            cmd,
+            cwd="/home/bram/projects/git_test_repo/",
+            check=True,
+            # stdout=subprocess.PIPE,
+            # stderr=subprocess.PIPE,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    except subprocess.CalledProcessError as e:
+        # Log the error message and raise the exception
+        error_message = (
+            "Command failed "
+            f"with return code {e.returncode}. Error: {e.stderr.strip()}"
+        )
+        raise RuntimeError(error_message) from e
+
+
+# %% [markdown]
+# ### Create agent that has git as a tool
+# Use LangGraph to create an agent that calls git tooling
+# %%
+tools = [git_tool]
+tool_node = ToolNode(tools)
+model = gpt_4o_mini.bind_tools(tools)
+
+def should_continue(state: MessagesState) -> Literal["git_tool", END]:
+    messages = state["messages"]
+    last_message = messages[-1]
+    if last_message.tool_calls:
+        return "git_tool"
+    return END
+
+workflow = StateGraph(MessagesState)
+workflow.add_node("gpt4o-mini", call_model)
+workflow.add_node("git_tool", tool_node)
+workflow.add_edge(START, "gpt4o-mini")
+workflow.add_conditional_edges("gpt4o-mini", should_continue)
+workflow.add_edge("git_tool", "gpt4o-mini")
+checkpointer = MemorySaver()
+app = workflow.compile(checkpointer=checkpointer)
+
+# %% [markdown]
+# #### Visualize graph
+# %%
+display(Image(app.get_graph(xray=True).draw_mermaid_png()))
+
+# %% [markdown]
+# #### create new branch
+# %%
+branch_prompt = (
+        f"Create a new branch named 'bot/config-change' and change to it"
+)
+events = app.stream({"messages": [("user", branch_prompt)]}, config, stream_mode="values")
+for event in events:
+    event["messages"][-1].pretty_print()
+
+# %% [markdown]
+# #### add/stage changes
+# %%
+file_to_stage = "/home/bram/projects/git_test_repo/some_file.txt"
+stage_prompt = (
+        f"Add changes to be staged in the file ({file_to_stage})"
+)
+events = app.stream({"messages": [("user", stage_prompt)]}, config, stream_mode="values")
+for event in events:
+    event["messages"][-1].pretty_print()
+
+# %% [markdown]
+# #### commit changes
+# %%
+commit_prompt = (
+        f"create a commit, suffix the title with 'bot:' "
+        "to indicate a non human wrote the commit"
+)
+events = app.stream({"messages": [("user", commit_prompt)]}, config, stream_mode="values")
+for event in events:
+    event["messages"][-1].pretty_print()
+
+# %% [markdown]
+# #### push new branch + changes
+# %%
+push_changes_prompt= (
+        f"Push the new changes"
+)
+events = app.stream({"messages": [("user", push_changes_prompt)]}, config, stream_mode="values")
+for event in events:
+    event["messages"][-1].pretty_print()
+
+
+# %% [markdown]
+# #### add tool for creation of a GitHub PR
+# %%
+@tool
+def gh_pr_create(title: str, description: str):
+    """
+    Use GitHub CLI command to create a Pull Request.
+    """
+    # WARNING: potential security & system risk if allowed to call ANY task;
+    cmd = (
+        f"gh pr create --title '{title}' --body '{description}'"
+           )
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd="/home/bram/projects/git_test_repo",
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    except subprocess.CalledProcessError as e:
+        # Log the error message and raise the exception
+        error_message = (
+            "Command failed "
+            f"with return code {e.returncode}. Error: {e.stderr.strip()}"
+        )
+        raise RuntimeError(error_message) from e
+
+# %# %% [markdown]
+# ### Create agent that has PR creation tool
+# Use LangGraph to create an agent that calls GitHub cli to create a PR
+# %%
+tools = [gh_pr_create]
+
+tool_node = ToolNode(tools)
+
+model = gpt_4o_mini.bind_tools(tools)
+
+
+def should_continue(state: MessagesState) -> Literal["gh_pr_create", END]:
+    messages = state["messages"]
+    last_message = messages[-1]
+    if last_message.tool_calls:
+        return "gh_pr_create"
+    return END
+
+workflow = StateGraph(MessagesState)
+workflow.add_node("gpt4o-mini", call_model)
+workflow.add_node("gh_pr_create", tool_node)
+workflow.add_edge(START, "gpt4o-mini")
+workflow.add_conditional_edges("gpt4o-mini", should_continue)
+workflow.add_edge("gh_pr_create", "gpt4o-mini")
+checkpointer = MemorySaver()
+app = workflow.compile(checkpointer=checkpointer)
+
+# %% [markdown]
+# #### Visualize graph
+# %%
+display(Image(app.get_graph(xray=True).draw_mermaid_png()))
+
+# %% [markdown]
+# #### create PR and return a link
+# %%
+repo_root = "/home/bram/projects/git_test_repo"
+create_pr_prompt = (
+    f"In the following git repository root '{repo_root}' "
+    "create a GitHub pull request. "
+    "Ensure it is clear you 'PRagent' created it. "
+    "Only return the link to the PR you created."
+)
+events = app.stream({"messages": [("user", create_pr_prompt)]}, config, stream_mode="values")
+for event in events:
+    event["messages"][-1].pretty_print()
+
