@@ -29,6 +29,29 @@ langchain-openai = "^0.2.3"
 [tool.poetry.group.dev.dependencies]
 jupyter-ascending = "^0.1.27"
 
+[tool.basedpyright]
+include = ["**/*.py"]
+typeCheckingMode = "off"    # type checking done by mypy
+reportUnusedImport = "none" # ruff already lints for this rule
+
+[tool.ruff.lint]
+select = [
+    # pycodestyle
+    "E",
+    # Pyflakes
+    "F",
+    # pyupgrade
+    "UP",
+    # flake8-bugbear
+    "B",
+    # flake8-simplify
+    "SIM",
+    # isort
+    "I",
+    # flake8-quotes
+    "Q",
+]
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
