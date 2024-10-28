@@ -617,25 +617,17 @@ class AgentState(TypedDict):
     # The add_messages function defines how an update should be processed
     # Default is to replace. add_messages says "append"
     messages: Annotated[Sequence[BaseMessage], add_messages]
+    docs: list[Document]
     user_question: str
     rephrased_question: str
 
-# %%
-retriever_tool = create_retriever_tool(
-    retriever,
-    "rephrased_retriever",
-    "retrieves similar documents by first rephrasing the question and then invokes the retriever"
-)
 
 # %%
-
-# NOTE: should do:
-# 1. rephrase question, retrieve docs
-# 2. docs and original question as new state
 def rephrased_retrieval(state: AgentState):
     print("---REPHRASE---")
     messages = state["messages"]
-    question: str = messages[0].content
+    # NOTE: dirty hack to get the first line containing question (could be cleaner)
+    question: str = messages[0].content.splitlines()[0]
     rephrase_prompt: PromptTemplate = hub.pull("lo-b/rag-rephrase-assist-prompt")
     rephrase_chain = (
         {"question": RunnablePassthrough()}
@@ -646,31 +638,25 @@ def rephrased_retrieval(state: AgentState):
 
     rephrased_question: str = rephrase_chain.invoke(question)
 
-    docs: list[Document] = retriever_tool.invoke(rephrased_question)
+    print("rephrased question:", rephrased_question)
+
+    docs = retriever.invoke(rephrased_question)
+
+    print(len(docs), "documents retrieved")
 
     return {
-        "messages": [docs],
+        "messages": [rephrased_question],
+        "docs": docs,
         "user_question": question,
-        "rephrased_question": rephrased_question
+        "rephrased_question": rephrased_question,
     }
 
 
 def generate(state: AgentState):
-    """
-    Generate answer
-
-    Args:
-        state (messages): The current state
-
-    Returns:
-         dict: The updated state with re-phrased question
-    """
     print("---GENERATE---")
-    messages = state["messages"]
     question: str = state["user_question"]
-    last_message = messages[-1]
 
-    docs: list[Document] = last_message.content
+    docs: list[Document] = state["docs"]
 
     mistral = ChatMistralAI(model_name=MISTRAL_MODEL_NAME)
     config_prompt: PromptTemplate = hub.pull("lo-b/rag-config-assist-prompt")
@@ -703,8 +689,9 @@ config_rag_app = config_rag_flow.compile(checkpointer=checkpointer)
 # %%
 display(Image(config_rag_app.get_graph(xray=True).draw_mermaid_png()))
 
+# %% [markdown]
+# ### test spin 🙏
 # %%
-# test spin 🙏
 config_change_prompt = "Ensure debugging is turned off"
 events = config_rag_app.stream({"messages": [("user", config_change_prompt)]}, config, stream_mode="values")
 for event in events:
