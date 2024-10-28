@@ -42,7 +42,7 @@
 # %%
 import os
 import subprocess
-from typing import Any, Literal, Optional, TypedDict
+from typing import Any, Literal, Optional, TypedDict,Annotated
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -52,6 +52,10 @@ from langchain_community.document_loaders.generic import GenericLoader
 from langchain_community.document_loaders.parsers.language.language_parser import (
     LanguageParser,
 )
+from collections.abc import Sequence
+from langgraph.graph.message import add_messages
+from langchain.tools.retriever import create_retriever_tool
+from langchain_core.messages import BaseMessage
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
@@ -294,8 +298,9 @@ rprint(answer)
 
 # %% [markdown]
 # ### Create agent using LangGraph
-# Use LangGraph to create an agent that calls the 'sed' tool -- think of chains as graphs, where some state gets passed and
-# is updated, throughout the chain.
+# Use LangGraph to create an agent that calls the 'sed' tool -- think of 
+# chains as graphs, where some state gets passed and is updated, throughout 
+# the chain.
 # %%
 tools = [run_sed_cmd]
 
@@ -507,7 +512,7 @@ for event in events:
 # #### commit changes
 # %%
 commit_prompt = (
-        f"create a commit, suffix the title with 'bot:' "
+        f"create a commit, prefix the title with 'bot:' "
         "to indicate a non human wrote the commit"
 )
 events = app.stream({"messages": [("user", commit_prompt)]}, config, stream_mode="values")
@@ -601,6 +606,107 @@ create_pr_prompt = (
     "Only return the link to the PR you created."
 )
 events = app.stream({"messages": [("user", create_pr_prompt)]}, config, stream_mode="values")
+for event in events:
+    event["messages"][-1].pretty_print()
+
+
+# %% [markdow]
+# Putting it all together
+# %%
+class AgentState(TypedDict):
+    # The add_messages function defines how an update should be processed
+    # Default is to replace. add_messages says "append"
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    user_question: str
+    rephrased_question: str
+
+# %%
+retriever_tool = create_retriever_tool(
+    retriever,
+    "rephrased_retriever",
+    "retrieves similar documents by first rephrasing the question and then invokes the retriever"
+)
+
+# %%
+
+# NOTE: should do:
+# 1. rephrase question, retrieve docs
+# 2. docs and original question as new state
+def rephrased_retrieval(state: AgentState):
+    print("---REPHRASE---")
+    messages = state["messages"]
+    question: str = messages[0].content
+    rephrase_prompt: PromptTemplate = hub.pull("lo-b/rag-rephrase-assist-prompt")
+    rephrase_chain = (
+        {"question": RunnablePassthrough()}
+        | rephrase_prompt
+        | gpt_4o_mini
+        | StrOutputParser()
+    )
+
+    rephrased_question: str = rephrase_chain.invoke(question)
+
+    docs: list[Document] = retriever_tool.invoke(rephrased_question)
+
+    return {
+        "messages": [docs],
+        "user_question": question,
+        "rephrased_question": rephrased_question
+    }
+
+
+def generate(state: AgentState):
+    """
+    Generate answer
+
+    Args:
+        state (messages): The current state
+
+    Returns:
+         dict: The updated state with re-phrased question
+    """
+    print("---GENERATE---")
+    messages = state["messages"]
+    question: str = state["user_question"]
+    last_message = messages[-1]
+
+    docs: list[Document] = last_message.content
+
+    mistral = ChatMistralAI(model_name=MISTRAL_MODEL_NAME)
+    config_prompt: PromptTemplate = hub.pull("lo-b/rag-config-assist-prompt")
+    generate: RunnableSerializable[Never, str] = (
+        {"context": RunnablePassthrough(), "question": RunnablePassthrough()}
+        | config_prompt
+        | mistral
+        | StrOutputParser()
+    )
+
+    # Run
+    response = generate.invoke({"context": docs, "question": question})
+    return {"messages": [response]}
+
+
+# %% [markdown]
+# #### Create workflow
+# %%
+config_rag_flow = StateGraph(MessagesState)
+config_rag_flow.add_node("rephrased-retrieval", rephrased_retrieval)
+config_rag_flow.add_node("rag", generate)
+config_rag_flow.add_edge(START, "rephrased-retrieval")
+config_rag_flow.add_edge("rephrased-retrieval", "rag")
+config_rag_flow.add_edge("rag", END)
+checkpointer = MemorySaver()
+config_rag_app = config_rag_flow.compile(checkpointer=checkpointer)
+
+# %% [markdown]
+# #### Visualize flow
+# %%
+display(Image(config_rag_app.get_graph(xray=True).draw_mermaid_png()))
+
+# %%
+# test spin 🙏
+config_change_prompt = "Ensure debugging is turned off"
+events = config_rag_app.stream({"messages": [("user", config_change_prompt)]}, config, stream_mode="values")
 for event in events:
     event["messages"][-1].pretty_print()
 
