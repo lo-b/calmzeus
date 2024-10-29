@@ -85,7 +85,7 @@ from typing_extensions import Never
 # %% [markdown]
 # ## Define constants
 # %%
-QDRANT_COLLECTION_NAME = "cst-enriched-simple-java-api"
+QDRANT_COLLECTION_NAME = "demo-simple-java-api"
 VOYAGE_MODEL_NAME = "voyage-code-2"
 MISTRAL_MODEL_NAME = "open-codestral-mamba"
 
@@ -153,7 +153,7 @@ def node_to_dict(node: Node) -> NodeDict:
 # #### Load files
 
 # %%
-java_code_dir = "/home/bram/projects/heavenlyhades/java/simple-api/"
+java_code_dir = "/home/bram/projects/config_test_repo/simple-api/"
 loader = GenericLoader.from_filesystem(
     java_code_dir,
     glob="**/src/main/**/[!.]*",
@@ -201,19 +201,20 @@ client = QdrantClient(
     api_key=os.environ["QDRANT_API_KEY"],
 )
 
+if not client.collection_exists(QDRANT_COLLECTION_NAME):
+    _ = client.create_collection(
+        collection_name=QDRANT_COLLECTION_NAME,
+        vectors_config=VectorParams(size=embedding_size, distance=Distance.COSINE),
+    )
+
 vector_store = QdrantVectorStore(
     client=client,
     collection_name=QDRANT_COLLECTION_NAME,
     embedding=embeddings,
 )
 
-if not client.collection_exists(QDRANT_COLLECTION_NAME):
-    _ = client.create_collection(
-        collection_name=QDRANT_COLLECTION_NAME,
-        vectors_config=VectorParams(size=embedding_size, distance=Distance.COSINE),
-    )
-    uuids = [str(uuid4()) for _ in range(len(documents))]
-    v_uuids = vector_store.add_documents(documents=documents, ids=uuids)
+uuids = [str(uuid4()) for _ in range(len(documents))]
+v_uuids = vector_store.add_documents(documents=documents, ids=uuids)
 
 
 # %% [markdown]
@@ -363,12 +364,12 @@ checkpointer = MemorySaver()
 # This compiles it into a LangChain Runnable,
 # meaning you can use it as you would any other runnable.
 # Note that we're (optionally) passing the memory when compiling the graph
-app = workflow.compile(checkpointer=checkpointer)
+sed_agent_app = workflow.compile(checkpointer=checkpointer)
 
 # %% [markdown]
 # #### Visualize graph
 # %%
-display(Image(app.get_graph(xray=True).draw_mermaid_png()))
+display(Image(sed_agent_app.get_graph(xray=True).draw_mermaid_png()))
 
 # %% [markdown]
 # ### Test agent with `sed` tool
@@ -384,7 +385,7 @@ echo "serendipity" > test_file.txt
 config = {"configurable": {"thread_id": "1"}}
 file_location = "/home/bram/projects/calmzeus/notebooks/test_file.txt"
 user_input = f"Given the file at the location `{file_location}` change the text 'serendipity' to Serendipitous"
-events = app.stream({"messages": [("user", user_input)]}, config, stream_mode="values")
+events = sed_agent_app.stream({"messages": [("user", user_input)]}, config, stream_mode="values")
 for event in events:
     event["messages"][-1].pretty_print()
 
@@ -418,7 +419,7 @@ manipulate_prompt = (
     "Add a line saying 'added line' "
     f"to the file located at `{file_to_manipulate}`"
 )
-events = app.stream({"messages": [("user", manipulate_prompt)]}, config, stream_mode="values")
+events = sed_agent_app.stream({"messages": [("user", manipulate_prompt)]}, config, stream_mode="values")
 for event in events:
     event["messages"][-1].pretty_print()
 
@@ -484,12 +485,12 @@ workflow.add_edge(START, "gpt4o-mini")
 workflow.add_conditional_edges("gpt4o-mini", should_continue)
 workflow.add_edge("git_tool", "gpt4o-mini")
 checkpointer = MemorySaver()
-app = workflow.compile(checkpointer=checkpointer)
+git_agent_app = workflow.compile(checkpointer=checkpointer)
 
 # %% [markdown]
 # #### Visualize graph
 # %%
-display(Image(app.get_graph(xray=True).draw_mermaid_png()))
+display(Image(git_agent_app.get_graph(xray=True).draw_mermaid_png()))
 
 # %% [markdown]
 # #### create new branch
@@ -497,7 +498,7 @@ display(Image(app.get_graph(xray=True).draw_mermaid_png()))
 branch_prompt = (
         f"Create a new branch named 'bot/config-change' and change to it"
 )
-events = app.stream({"messages": [("user", branch_prompt)]}, config, stream_mode="values")
+events = git_agent_app.stream({"messages": [("user", branch_prompt)]}, config, stream_mode="values")
 for event in events:
     event["messages"][-1].pretty_print()
 
@@ -508,7 +509,7 @@ file_to_stage = "/home/bram/projects/git_test_repo/some_file.txt"
 stage_prompt = (
         f"Add changes to be staged in the file ({file_to_stage})"
 )
-events = app.stream({"messages": [("user", stage_prompt)]}, config, stream_mode="values")
+events = git_agent_app.stream({"messages": [("user", stage_prompt)]}, config, stream_mode="values")
 for event in events:
     event["messages"][-1].pretty_print()
 
@@ -519,7 +520,7 @@ commit_prompt = (
         f"create a commit, prefix the title with 'bot:' "
         "to indicate a non human wrote the commit"
 )
-events = app.stream({"messages": [("user", commit_prompt)]}, config, stream_mode="values")
+events = git_agent_app.stream({"messages": [("user", commit_prompt)]}, config, stream_mode="values")
 for event in events:
     event["messages"][-1].pretty_print()
 
@@ -529,7 +530,7 @@ for event in events:
 push_changes_prompt= (
         f"Push the new changes"
 )
-events = app.stream({"messages": [("user", push_changes_prompt)]}, config, stream_mode="values")
+events = git_agent_app.stream({"messages": [("user", push_changes_prompt)]}, config, stream_mode="values")
 for event in events:
     event["messages"][-1].pretty_print()
 
@@ -592,12 +593,12 @@ workflow.add_edge(START, "gpt4o-mini")
 workflow.add_conditional_edges("gpt4o-mini", should_continue)
 workflow.add_edge("gh_pr_create", "gpt4o-mini")
 checkpointer = MemorySaver()
-app = workflow.compile(checkpointer=checkpointer)
+gh_agent_app = workflow.compile(checkpointer=checkpointer)
 
 # %% [markdown]
 # #### Visualize graph
 # %%
-display(Image(app.get_graph(xray=True).draw_mermaid_png()))
+display(Image(gh_agent_app.get_graph(xray=True).draw_mermaid_png()))
 
 # %% [markdown]
 # #### create PR and return a link
@@ -609,7 +610,7 @@ create_pr_prompt = (
     "Ensure it is clear you 'PRagent' created it. "
     "Only return the link to the PR you created."
 )
-events = app.stream({"messages": [("user", create_pr_prompt)]}, config, stream_mode="values")
+events = gh_agent_app.stream({"messages": [("user", create_pr_prompt)]}, config, stream_mode="values")
 for event in events:
     event["messages"][-1].pretty_print()
 
