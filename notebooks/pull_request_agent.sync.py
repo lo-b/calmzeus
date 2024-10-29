@@ -56,7 +56,7 @@ from operator import add
 from collections.abc import Sequence
 from langgraph.graph.message import add_messages
 from langchain.tools.retriever import create_retriever_tool
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
@@ -625,8 +625,7 @@ class AgentState(MessagesState):
 def rephrased_retrieval(state: AgentState):
     print("---REPHRASE---")
     messages = state["messages"]
-    # NOTE: dirty hack to get the first line containing question (could be cleaner)
-    question: str = messages[0].content.splitlines()[0]
+    question: str = messages[0].content
     rephrase_prompt: PromptTemplate = hub.pull("lo-b/rag-rephrase-assist-prompt")
     rephrase_chain = (
         {"question": RunnablePassthrough()}
@@ -642,7 +641,7 @@ def rephrased_retrieval(state: AgentState):
     print(len(docs), "documents retrieved")
 
     return {
-        "messages": [rephrased_question],
+        "messages": [AIMessage(content=rephrased_question)],
         "docs": docs,
         "user_question": question,
         "rephrased_question": rephrased_question,
@@ -669,7 +668,7 @@ def generate(state: AgentState):
     )
 
     response = generate.invoke({"context": docs, "question": question})
-    return {"messages": [response]}
+    return {"messages": [AIMessage(content=response)]}
 
 
 # %% [markdown]
