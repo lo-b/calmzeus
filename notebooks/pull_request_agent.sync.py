@@ -42,7 +42,7 @@
 # %%
 import os
 import subprocess
-from typing import Any, Literal, Optional, TypedDict,Annotated
+from typing import Any, Literal, Optional, TypedDict, Annotated
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -52,6 +52,7 @@ from langchain_community.document_loaders.generic import GenericLoader
 from langchain_community.document_loaders.parsers.language.language_parser import (
     LanguageParser,
 )
+from operator import add
 from collections.abc import Sequence
 from langgraph.graph.message import add_messages
 from langchain.tools.retriever import create_retriever_tool
@@ -62,6 +63,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import (
     RunnablePassthrough,
     RunnableSerializable,
+    RunnablePick
 )
 from langchain_core.tools import tool
 from langchain_mistralai.chat_models import ChatMistralAI
@@ -613,11 +615,8 @@ for event in events:
 # %% [markdow]
 # Putting it all together
 # %%
-class AgentState(TypedDict):
-    # The add_messages function defines how an update should be processed
-    # Default is to replace. add_messages says "append"
-    messages: Annotated[Sequence[BaseMessage], add_messages]
-    docs: list[Document]
+class AgentState(MessagesState):
+    docs: Annotated[list[Document], add]
     user_question: str
     rephrased_question: str
 
@@ -637,8 +636,6 @@ def rephrased_retrieval(state: AgentState):
     )
 
     rephrased_question: str = rephrase_chain.invoke(question)
-
-    print("rephrased question:", rephrased_question)
 
     docs = retriever.invoke(rephrased_question)
 
@@ -660,14 +657,17 @@ def generate(state: AgentState):
 
     mistral = ChatMistralAI(model_name=MISTRAL_MODEL_NAME)
     config_prompt: PromptTemplate = hub.pull("lo-b/rag-config-assist-prompt")
-    generate: RunnableSerializable[Never, str] = (
-        {"context": RunnablePassthrough(), "question": RunnablePassthrough()}
+
+    generate: RunnableSerializable[dict, str] = (
+        {
+            "context": RunnablePick(keys=["context"]),
+            "question": RunnablePick(keys=["question"])
+        }
         | config_prompt
         | mistral
         | StrOutputParser()
     )
 
-    # Run
     response = generate.invoke({"context": docs, "question": question})
     return {"messages": [response]}
 
