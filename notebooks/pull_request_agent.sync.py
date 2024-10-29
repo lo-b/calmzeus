@@ -248,8 +248,34 @@ rephrased_retriever: RunnableSerializable[Never, list[Document]] = (
 )
 
 
+
 # %% [markdown]
-# ### Add tool for calling `sed` CLI command
+# ### Generation
+# %%
+mistral = ChatMistralAI(model_name=MISTRAL_MODEL_NAME)
+config_prompt: PromptTemplate = hub.pull("lo-b/rag-config-assist-prompt")
+generate: RunnableSerializable[Never, str] = (
+    {"context": rephrased_retriever, "question": RunnablePassthrough()}
+    | config_prompt
+    | mistral
+    | StrOutputParser()
+)
+
+# %%
+answer = generate.invoke("Change app dev port to 7777")
+
+# %%
+rprint(answer)
+
+
+# %% [markdown]
+# ### Create agent using LangGraph
+# Use LangGraph to create an agent that calls the 'sed' tool -- think of 
+# chains as graphs, where some state gets passed and is updated, throughout 
+# the chain.
+
+# %% [markdown]
+# #### Add tool for calling `sed` CLI command
 # Define tool for running `sed` CLI command with the given 'cmd_args'.
 # %%
 @tool
@@ -279,35 +305,11 @@ def run_sed_cmd(cmd_args: list[str]) -> str:
         raise RuntimeError(error_message) from e
 
 
-# %% [markdown]
-# ### Generation (full chain)
-# %%
-mistral = ChatMistralAI(model_name=MISTRAL_MODEL_NAME)
-config_prompt: PromptTemplate = hub.pull("lo-b/rag-config-assist-prompt")
-generate: RunnableSerializable[Never, str] = (
-    {"context": rephrased_retriever, "question": RunnablePassthrough()}
-    | config_prompt
-    | mistral
-    | StrOutputParser()
-)
-
-# %%
-answer = generate.invoke("Change app dev port to 7777")
-
-# %%
-rprint(answer)
-
-
-# %% [markdown]
-# ### Create agent using LangGraph
-# Use LangGraph to create an agent that calls the 'sed' tool -- think of 
-# chains as graphs, where some state gets passed and is updated, throughout 
-# the chain.
-# %%
 tools = [run_sed_cmd]
 
 tool_node = ToolNode(tools)
 
+# %%
 model = gpt_4o_mini.bind_tools(tools)
 
 
