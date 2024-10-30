@@ -42,7 +42,9 @@
 # %%
 import os
 import subprocess
-from typing import Any, Literal, Optional, TypedDict, Annotated
+from operator import add
+from os import dup
+from typing import Annotated, Any, Literal, Optional, TypedDict
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -52,26 +54,20 @@ from langchain_community.document_loaders.generic import GenericLoader
 from langchain_community.document_loaders.parsers.language.language_parser import (
     LanguageParser,
 )
-from operator import add
-from collections.abc import Sequence
-from langgraph.graph.message import add_messages
-from langchain.tools.retriever import create_retriever_tool
-from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.documents import Document
+from langchain_core.messages import AIMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import (
     RunnablePassthrough,
+    RunnablePick,
     RunnableSerializable,
-    RunnablePick
 )
 from langchain_core.tools import tool
 from langchain_mistralai.chat_models import ChatMistralAI
 from langchain_openai import ChatOpenAI
 from langchain_qdrant import QdrantVectorStore
-from langchain_text_splitters import (
-    Language as SplitterLanguage,
-)
+from langchain_text_splitters import Language as SplitterLanguage
 from langchain_voyageai import VoyageAIEmbeddings
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -213,8 +209,9 @@ vector_store = QdrantVectorStore(
     embedding=embeddings,
 )
 
-uuids = [str(uuid4()) for _ in range(len(documents))]
-v_uuids = vector_store.add_documents(documents=documents, ids=uuids)
+if not client.collection_exists(QDRANT_COLLECTION_NAME):
+    uuids = [str(uuid4()) for _ in range(len(documents))]
+    v_uuids = vector_store.add_documents(documents=documents, ids=uuids)
 
 
 # %% [markdown]
@@ -249,7 +246,6 @@ rephrased_retriever: RunnableSerializable[Never, list[Document]] = (
 )
 
 
-
 # %% [markdown]
 # ### Generation
 # %%
@@ -271,9 +267,10 @@ rprint(answer)
 
 # %% [markdown]
 # ### Create agent using LangGraph
-# Use LangGraph to create an agent that calls the 'sed' tool -- think of 
-# chains as graphs, where some state gets passed and is updated, throughout 
+# Use LangGraph to create an agent that calls the 'sed' tool -- think of
+# chains as graphs, where some state gets passed and is updated, throughout
 # the chain.
+
 
 # %% [markdown]
 # #### Add tool for calling `sed` CLI command
@@ -373,11 +370,10 @@ display(Image(sed_agent_app.get_graph(xray=True).draw_mermaid_png()))
 
 # %% [markdown]
 # ### Test agent with `sed` tool
-# #### Write line to `test_file.txt`
+# #### Create new file `test_file.txt` and write some text
 # %%
-%%bash
-echo "serendipity" > test_file.txt
-
+with open("test_file.txt", "x") as file:
+    subprocess.run(["echo", "serendipity"], stdout=file, text=True)
 
 # %% [markdown]
 # #### Ask agent to manipulate text
@@ -385,7 +381,9 @@ echo "serendipity" > test_file.txt
 config = {"configurable": {"thread_id": "1"}}
 file_location = "/home/bram/projects/calmzeus/notebooks/test_file.txt"
 user_input = f"Given the file at the location `{file_location}` change the text 'serendipity' to Serendipitous"
-events = sed_agent_app.stream({"messages": [("user", user_input)]}, config, stream_mode="values")
+events = sed_agent_app.stream(
+    {"messages": [("user", user_input)]}, config, stream_mode="values"
+)
 for event in events:
     event["messages"][-1].pretty_print()
 
@@ -399,8 +397,11 @@ with open(file_location, "r") as s:
 # %% [markdown]
 # #### remove file
 # %%
-%%bash
-rm /home/bram/projects/calmzeus/notebooks/test_file.txt
+subprocess.run(
+    ["rm", "/home/bram/projects/calmzeus/notebooks/test_file.txt"],
+    capture_output=True,
+    text=True,
+)
 
 # %% [markdown]
 # ### Manual agent call flow
@@ -408,18 +409,24 @@ rm /home/bram/projects/calmzeus/notebooks/test_file.txt
 
 # #### list current git changes
 # %%
-%%bash
-git -C /home/bram/projects/git_test_repo status
+git_status = subprocess.run(
+    ["git", "-C", "/home/bram/projects/git_test_repo", "status"],
+    capture_output=True,
+    text=True,
+)
+rprint(git_status.stdout)
+
 
 # %% [markdown]
 # #### use sed to create change
 # %%
 file_to_manipulate = "/home/bram/projects/git_test_repo/some_file.txt"
 manipulate_prompt = (
-    "Add a line saying 'added line' "
-    f"to the file located at `{file_to_manipulate}`"
+    f"Add a line saying 'added line' to the file located at `{file_to_manipulate}`"
 )
-events = sed_agent_app.stream({"messages": [("user", manipulate_prompt)]}, config, stream_mode="values")
+events = sed_agent_app.stream(
+    {"messages": [("user", manipulate_prompt)]}, config, stream_mode="values"
+)
 for event in events:
     event["messages"][-1].pretty_print()
 
@@ -427,8 +434,13 @@ for event in events:
 # %% [markdown]
 # #### show diff after agent tool call
 # %%
-%%bash
-git -C /home/bram/projects/git_test_repo diff
+git_diff = subprocess.run(
+    ["git", "-C", "/home/bram/projects/git_test_repo", "diff"],
+    capture_output=True,
+    text=True,
+)
+rprint(git_diff.stdout)
+
 
 # %% [markdown]
 # #### define git commit tool and add it to the tools
@@ -471,12 +483,14 @@ tools = [git_tool]
 tool_node = ToolNode(tools)
 model = gpt_4o_mini.bind_tools(tools)
 
+
 def should_continue(state: MessagesState) -> Literal["git_tool", END]:
     messages = state["messages"]
     last_message = messages[-1]
     if last_message.tool_calls:
         return "git_tool"
     return END
+
 
 workflow = StateGraph(MessagesState)
 workflow.add_node("gpt4o-mini", call_model)
@@ -495,10 +509,10 @@ display(Image(git_agent_app.get_graph(xray=True).draw_mermaid_png()))
 # %% [markdown]
 # #### create new branch
 # %%
-branch_prompt = (
-        f"Create a new branch named 'bot/config-change' and change to it"
+branch_prompt = "Create a new branch named 'bot/config-change' and change to it"
+events = git_agent_app.stream(
+    {"messages": [("user", branch_prompt)]}, config, stream_mode="values"
 )
-events = git_agent_app.stream({"messages": [("user", branch_prompt)]}, config, stream_mode="values")
 for event in events:
     event["messages"][-1].pretty_print()
 
@@ -506,10 +520,10 @@ for event in events:
 # #### add/stage changes
 # %%
 file_to_stage = "/home/bram/projects/git_test_repo/some_file.txt"
-stage_prompt = (
-        f"Add changes to be staged in the file ({file_to_stage})"
+stage_prompt = f"Add changes to be staged in the file ({file_to_stage})"
+events = git_agent_app.stream(
+    {"messages": [("user", stage_prompt)]}, config, stream_mode="values"
 )
-events = git_agent_app.stream({"messages": [("user", stage_prompt)]}, config, stream_mode="values")
 for event in events:
     event["messages"][-1].pretty_print()
 
@@ -517,20 +531,22 @@ for event in events:
 # #### commit changes
 # %%
 commit_prompt = (
-        f"create a commit, prefix the title with 'bot:' "
-        "to indicate a non human wrote the commit"
+    "create a commit, prefix the title with 'bot:' "
+    "to indicate a non human wrote the commit"
 )
-events = git_agent_app.stream({"messages": [("user", commit_prompt)]}, config, stream_mode="values")
+events = git_agent_app.stream(
+    {"messages": [("user", commit_prompt)]}, config, stream_mode="values"
+)
 for event in events:
     event["messages"][-1].pretty_print()
 
 # %% [markdown]
 # #### push new branch + changes
 # %%
-push_changes_prompt= (
-        f"Push the new changes"
+push_changes_prompt = f"Push the new changes"
+events = git_agent_app.stream(
+    {"messages": [("user", push_changes_prompt)]}, config, stream_mode="values"
 )
-events = git_agent_app.stream({"messages": [("user", push_changes_prompt)]}, config, stream_mode="values")
 for event in events:
     event["messages"][-1].pretty_print()
 
@@ -544,9 +560,7 @@ def gh_pr_create(title: str, description: str):
     Use GitHub CLI command to create a Pull Request.
     """
     # WARNING: potential security & system risk if allowed to call ANY task;
-    cmd = (
-        f"gh pr create --title '{title}' --body '{description}'"
-           )
+    cmd = f"gh pr create --title '{title}' --body '{description}'"
 
     try:
         result = subprocess.run(
@@ -568,6 +582,7 @@ def gh_pr_create(title: str, description: str):
         )
         raise RuntimeError(error_message) from e
 
+
 # %# %% [markdown]
 # ### Create agent that has PR creation tool
 # Use LangGraph to create an agent that calls GitHub cli to create a PR
@@ -585,6 +600,7 @@ def should_continue(state: MessagesState) -> Literal["gh_pr_create", END]:
     if last_message.tool_calls:
         return "gh_pr_create"
     return END
+
 
 workflow = StateGraph(MessagesState)
 workflow.add_node("gpt4o-mini", call_model)
@@ -610,7 +626,9 @@ create_pr_prompt = (
     "Ensure it is clear you 'PRagent' created it. "
     "Only return the link to the PR you created."
 )
-events = gh_agent_app.stream({"messages": [("user", create_pr_prompt)]}, config, stream_mode="values")
+events = gh_agent_app.stream(
+    {"messages": [("user", create_pr_prompt)]}, config, stream_mode="values"
+)
 for event in events:
     event["messages"][-1].pretty_print()
 
@@ -656,14 +674,13 @@ def generate(state: AgentState):
     question: str = state["user_question"]
 
     docs: list[Document] = state["docs"]
-
     mistral = ChatMistralAI(model_name=MISTRAL_MODEL_NAME)
     config_prompt: PromptTemplate = hub.pull("lo-b/rag-config-assist-prompt")
 
-    generate: RunnableSerializable[dict, str] = (
+    generate: RunnableSerializable[Never, str] = (
         {
             "context": RunnablePick(keys=["context"]),
-            "question": RunnablePick(keys=["question"])
+            "question": RunnablePick(keys=["question"]),
         }
         | config_prompt
         | mistral
@@ -695,7 +712,8 @@ display(Image(config_rag_app.get_graph(xray=True).draw_mermaid_png()))
 # ### test spin 🙏
 # %%
 config_change_prompt = "Ensure debugging is turned off"
-events = config_rag_app.stream({"messages": [("user", config_change_prompt)]}, config, stream_mode="values")
+events = config_rag_app.stream(
+    {"messages": [("user", config_change_prompt)]}, config, stream_mode="values"
+)
 for event in events:
     event["messages"][-1].pretty_print()
-
