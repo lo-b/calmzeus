@@ -40,11 +40,14 @@
 # # Exploration
 # ## Imports
 # %%
+
+
+import functools
+import operator
 import os
 import subprocess
 from operator import add
-from os import dup
-from typing import Annotated, Any, Literal, Optional, TypedDict
+from typing import Annotated, Any, Literal, Optional, Sequence, TypedDict
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -55,15 +58,18 @@ from langchain_community.document_loaders.parsers.language.language_parser impor
     LanguageParser,
 )
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import PromptTemplate
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    MessagesPlaceholder,
+    PromptTemplate,
+)
 from langchain_core.runnables import (
     RunnablePassthrough,
     RunnablePick,
     RunnableSerializable,
 )
-from langchain_core.tools import tool
 from langchain_mistralai.chat_models import ChatMistralAI
 from langchain_openai import ChatOpenAI
 from langchain_qdrant import QdrantVectorStore
@@ -71,7 +77,8 @@ from langchain_text_splitters import Language as SplitterLanguage
 from langchain_voyageai import VoyageAIEmbeddings
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
-from langgraph.prebuilt import ToolNode
+from langgraph.prebuilt import ToolNode, create_react_agent
+from pydantic import BaseModel
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 from rich import print as rprint
@@ -276,7 +283,6 @@ rprint(answer)
 # #### Add tool for calling `sed` CLI command
 # Define tool for running `sed` CLI command with the given 'cmd_args'.
 # %%
-@tool
 def run_sed_cmd(cmd_args: list[str]) -> str:
     """
     Use Streaming Editor CLI (sed) command and arguments to manipulate text.
@@ -445,7 +451,6 @@ rprint(git_diff.stdout)
 # %% [markdown]
 # #### define git commit tool and add it to the tools
 # %%
-@tool
 def git_tool(sub_cmd: str, cmd_args: list[str]):
     """
     Use git sub command (sub_cmd) to create a commit (commit) or stage changes.
@@ -554,7 +559,6 @@ for event in events:
 # %% [markdown]
 # #### add tool for creation of a GitHub PR
 # %%
-@tool
 def gh_pr_create(title: str, description: str):
     """
     Use GitHub CLI command to create a Pull Request.
@@ -636,14 +640,14 @@ for event in events:
 # %% [markdow]
 # Putting it all together
 # %%
-class AgentState(MessagesState):
+class GraphState(MessagesState):
     docs: Annotated[list[Document], add]
     user_question: str
     rephrased_question: str
 
 
 # %%
-def rephrased_retrieval(state: AgentState):
+def rephrased_retrieval(state: GraphState):
     print("---REPHRASE---")
     messages = state["messages"]
     question: str = messages[0].content
@@ -669,7 +673,7 @@ def rephrased_retrieval(state: AgentState):
     }
 
 
-def generate(state: AgentState):
+def generate(state: GraphState):
     print("---GENERATE---")
     question: str = state["user_question"]
 
@@ -717,3 +721,137 @@ events = config_rag_app.stream(
 )
 for event in events:
     event["messages"][-1].pretty_print()
+
+
+# %% [markdown]
+# ### Create multi-agent supervisor
+# create supervisor to orchestrate agent calls (sed, git & gh)
+# see 👉 [here](https://langchain-ai.github.io/langgraph/tutorials/multi_agent/agent_supervisor/)
+# %% [markdown]
+# #### helper util
+# %%
+def agent_node(state, agent, name):
+    result = agent.invoke(state)
+    return {
+        "messages": [HumanMessage(content=result["messages"][-1].content, name=name)]
+    }
+
+
+# %% [markdown]
+# #### create agent supervisor
+# %%
+members = ["GitAgent", "PullRequestAgent", "SedAgent"]
+system_prompt = (
+    "You are a supervisor tasked with managing a conversation between the"
+    " following workers:  {members}. Given the following user request,"
+    " respond with the worker to act next. Each worker will perform a"
+    " task and respond with their results and status. When finished,"
+    " respond with FINISH."
+)
+# Our team supervisor is an LLM node. It just picks the next agent to process
+# and decides when the work is completed
+options = ["FINISH"] + members
+
+
+class routeResponse(BaseModel):
+    # WARNING: old code used unpacking of options (`*options`) -- but needs
+    # python >=3.11. Maybe code below has bugs if routing does not work as
+    # expected
+    next: Literal["GitAgent", "PullRequestAgent", "SedAgent", "FINISH"]
+
+
+prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", system_prompt),
+        MessagesPlaceholder(variable_name="messages"),
+        (
+            "system",
+            "Given the conversation above, who should act next?"
+            " Or should we FINISH? Select one of: {options}",
+        ),
+    ]
+).partial(options=str(options), members=", ".join(members))
+
+
+llm = ChatOpenAI(model="gpt-4o")
+
+
+def supervisor_agent(state):
+    supervisor_chain = prompt | llm.with_structured_output(routeResponse)
+    return supervisor_chain.invoke(state)
+
+
+# %% [markdown]
+# #### Create graph
+
+
+# %%
+# The agent state is the input to each node in the graph
+class AgentState(TypedDict):
+    # The annotation tells the graph that new messages will always
+    # be added to the current states
+    messages: Annotated[Sequence[BaseMessage], operator.add]
+    # The 'next' field indicates where to route to next
+    next: str
+
+
+sed_agent = create_react_agent(llm, tools=[run_sed_cmd])
+sed_agent_node = functools.partial(agent_node, agent=sed_agent, name="SedAgent")
+
+git_agent = create_react_agent(llm, tools=[git_tool])
+git_agent_node = functools.partial(agent_node, agent=git_agent, name="GitAgent")
+
+pr_agent = create_react_agent(llm, tools=[gh_pr_create])
+pr_agent_node = functools.partial(agent_node, agent=pr_agent, name="PullRequestAgent")
+
+multi_agent_flow = StateGraph(AgentState)
+multi_agent_flow.add_node("SedAgent", sed_agent_node)
+multi_agent_flow.add_node("GitAgent", git_agent_node)
+multi_agent_flow.add_node("PullRequestAgent", pr_agent_node)
+multi_agent_flow.add_node("supervisor", supervisor_agent)
+
+# %% [markdown]
+# #### add edges
+# %%
+for member in members:
+    # We want our workers to ALWAYS "report back" to the supervisor when done
+    multi_agent_flow.add_edge(member, "supervisor")
+# The supervisor populates the "next" field in the graph state
+# which routes to a node or finishes
+conditional_map = {k: k for k in members}
+conditional_map["FINISH"] = END
+multi_agent_flow.add_conditional_edges(
+    "supervisor", lambda x: x["next"], conditional_map
+)
+# Finally, add entrypoint
+multi_agent_flow.add_edge(START, "supervisor")
+
+graph = multi_agent_flow.compile()
+
+# %%
+display(Image(graph.get_graph(xray=True).draw_mermaid_png()))
+
+# %%
+for s in graph.stream(
+    {
+        "messages": [
+            HumanMessage(
+                content="""
+                in git source root: `/home/bram/projects/git_test_repo`, change
+                the file: `/home/bram/projects/git_test_repo/some_file.txt`
+                with the following steps below:
+
+                Add a line to the file with the text: 'an added line'. Then
+                checkout a new branch named 'bot/multi-agent-test' if it doesnt
+                exist yet, commit the
+                changes (with 'bot:' prefixed to the commit message). Then
+                push the branch. Finally create a PR on GitHub, using a clear
+                title and description that you (PRAgent) made this change.
+                """
+            )
+        ]
+    }
+):
+    if "__end__" not in s:
+        print(s)
+        print("----")
