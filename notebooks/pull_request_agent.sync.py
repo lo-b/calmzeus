@@ -216,7 +216,10 @@ vector_store = QdrantVectorStore(
     embedding=embeddings,
 )
 
-if not client.collection_exists(QDRANT_COLLECTION_NAME):
+if (
+    client.collection_exists(QDRANT_COLLECTION_NAME)
+    and client.get_collection(QDRANT_COLLECTION_NAME).points_count == 0
+):
     uuids = [str(uuid4()) for _ in range(len(documents))]
     v_uuids = vector_store.add_documents(documents=documents, ids=uuids)
 
@@ -854,4 +857,53 @@ for s in graph.stream(
 ):
     if "__end__" not in s:
         print(s)
+        print("----")
+
+
+# %%
+def invoke_subgraph(state: GraphState):
+    supervisor_response = graph.invoke(
+        {
+            "messages": [
+                HumanMessage(
+                    content=f"""
+                    Given the following previous output of how to solve the user's 
+                    question pass instructions to the supervisor:
+                    {state["messages"][-1].content}
+                    """
+                )
+            ]
+        }
+    )
+
+    return {
+        "messages": [AIMessage(content=supervisor_response["messages"][-1].content)]
+    }
+
+
+# %% putting it all (RAG + agents) together
+full_flow = StateGraph(MessagesState)
+full_flow.add_node("rephrased-retrieval", rephrased_retrieval)
+full_flow.add_node("rag", generate)
+full_flow.add_node("supervisor", invoke_subgraph)
+full_flow.add_edge(START, "rephrased-retrieval")
+full_flow.add_edge("rephrased-retrieval", "rag")
+full_flow.add_edge("rag", "supervisor")
+
+checkpointer = MemorySaver()
+rag_agents_app = full_flow.compile(checkpointer=checkpointer)
+
+# %%
+display(Image(rag_agents_app.get_graph(xray=True).draw_mermaid_png()))
+
+# %%
+config_change_prompt = "Ensure debugging is turned off"
+for s in rag_agents_app.stream(
+    {"messages": [("user", config_change_prompt)]},
+    config,
+    stream_mode="values",
+    subgraphs=True,
+):
+    if "__end__" not in s:
+        rprint(s)
         print("----")
