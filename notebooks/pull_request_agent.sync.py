@@ -897,6 +897,11 @@ rag_agents_app = full_flow.compile(checkpointer=checkpointer)
 display(Image(rag_agents_app.get_graph(xray=True).draw_mermaid_png()))
 
 # %%
+# WARNING: Architecture defined above has poor performance. Run below will
+# consume about 26000 tokens (€0.10) and either:
+# 1. Incorrectly/partially solve the user's prompt and finish
+# 2. Throw a 'recursion limit' error
+# therefore output has been cleared.
 config_change_prompt = "Ensure debugging is turned off"
 for s in rag_agents_app.stream(
     {"messages": [("user", config_change_prompt)]},
@@ -907,3 +912,22 @@ for s in rag_agents_app.stream(
     if "__end__" not in s:
         rprint(s)
         print("----")
+
+# %% [markdown]
+# ## Conclusion
+# Calling a particular tool (as an agent) separately, with a 'well defined'
+# prompt gives good results. Combining the agents also produces a PR link as
+# expected. Combining the existing RAG flow to answer config questions, with a
+# supervisor of agents, falls short in terms of performance.
+
+# In particular, it seems to have trouble passing the actual file path (source)
+# that needs to be changed. It will either finish without error or it will hit
+# a recursion limit. Furthermore, costs are starting to become noticeable at 10
+# euro cents a pop.
+# ### Improvements
+# 1. Change to local LLMs where possible to save costs; probably possible for
+# all agents, at least for testing.
+# 2. Improve prompts to better chain post-RAG flow to the supervisor -- doing
+# the actual work.
+# 3. Ensure post-RAG flow is structured enough such that supervisor can take
+# actions in correct order.
